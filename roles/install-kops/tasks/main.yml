@@ -1,0 +1,18 @@
+---
+## Install Kops tasks
+
+- name: Check if kops already installed
+  stat:
+    path: /usr/local/bin/kops
+  register: kops
+
+- name: Download Kops binary
+  get_url:
+    url: "{{ kops_download_path }}"
+    dest: /usr/local/bin/kops
+    owner: root
+    group: root
+    mode: 0755
+    force: yes
+  become: true
+  when: kops.stat.exists == false

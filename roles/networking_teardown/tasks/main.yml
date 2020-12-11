@@ -1,0 +1,207 @@
+---
+# tasks file for jenkins_teardown
+# - name: Check for running EC2 instances to Terminate
+#   ec2_instance_info:
+#     region: "{{ aws_region }}"
+#     profile: "{{ aws_profile }}"
+#     filters:
+#       "tag:Name": "{{ tag_value }}"
+#       instance-state-name: [ "running" ]
+#   register: existing_ec2
+
+# - name: Terminate EC2 Instance
+#   ec2:
+#     state: absent
+#     region: "{{ aws_region }}"
+#     profile: "{{ aws_profile }}"
+#     instance_id: "{{ existing_ec2.instances[0].instance_id }}"
+#     wait: yes
+#   when: existing_ec2.instances
+
+- name: Get all vpc peers with specific filters
+  ec2_vpc_peering_info:
+    region: "{{ aws_region }}"
+    filters:
+      "tag:Name": "Peering connection for RDS to K8s"
+  register: vpc_peer
+
+- debug: msg="vpc_peer:{{ vpc_peer }}"
+
+- name: delete a local VPC peering Connection
+  ec2_vpc_peer:
+    region: "{{ aws_region }}"
+    peering_id: "{{ vpc_peer.result[0].vpc_peering_connection_id }}"
+    state: absent
+  register: deleted_peer
+  ignore_errors: true
+
+- debug: msg="db_identifier:{{ db_identifier }}"
+
+- rds_instance_info:
+    db_instance_identifier: "{{ db_identifier }}"
+  register: webapp_rds_instance
+
+# - name: Terminate Webapp RDS Instance
+#   rds_instance:
+#     db_instance_identifier: "{{ db_identifier }}"
+#     state: absent
+#     skip_final_snapshot: True
+#   register: rds_inst_webapp_teardown
+#   ignore_errors: true
+#   async: 600
+#   poll: 0
+
+- name: Terminate Webapp RDS Instance
+  command: >
+    aws rds delete-db-instance --db-instance-identifier {{ db_identifier }} --skip-final-snapshot
+  register: rds_inst_webapp_teardown
+  ignore_errors: true
+
+# - debug: msg="rds_inst_webapp_teardown:{{ rds_inst_webapp_teardown }}"
+
+# - name: Terminate Poller RDS Instance
+#   rds_instance:
+#     db_instance_identifier: "{{ poller_db_identifier }}"
+#     state: absent
+#     skip_final_snapshot: True
+#   register: rds_inst_poller_teardown
+#   ignore_errors: true
+#   async: 1000
+#   poll: 0
+
+- name: Terminate Poller RDS Instance
+  command: >
+    aws rds delete-db-instance --db-instance-identifier {{ poller_db_identifier }} --skip-final-snapshot
+  register: rds_inst_poller_teardown
+  ignore_errors: true
+
+- name: Terminate Notifier RDS Instance
+  rds_instance:
+    db_instance_identifier: "{{ notifier_db_identifier }}"
+    state: absent
+    skip_final_snapshot: True
+  register: rds_inst_notifier_teardown
+  ignore_errors: true
+  # async: 1000
+  # poll: 0
+
+# Async wait for RDS instance teardown
+# - name: 'rds_inst_webapp teardown - check on async task'
+#   async_status:
+#     jid: "{{ rds_inst_webapp_teardown.ansible_job_id }}"
+#   register: job_result_webapp_teardown
+#   until: rds_inst_webapp_teardown.finished
+#   retries: 20
+#   delay: 30
+
+# - name: 'rds_inst_poller teardown - check on async task'
+#   async_status:
+#     jid: "{{ rds_inst_poller_teardown.ansible_job_id }}"
+#   register: job_result_poller_teardown
+#   until: rds_inst_poller_teardown.finished
+#   retries: 20
+#   delay: 30
+
+# - name: 'rds_inst_notifier teardown - check on async task'
+#   async_status:
+#     jid: "{{ rds_inst_notifier_teardown.ansible_job_id }}"
+#   register: job_result_notifier_teardown
+#   until: rds_inst_notifier_teardown.finished
+#   retries: 20
+#   delay: 30
+
+# Pause for 1 minute in case any RDS instance is still being deleted.
+- pause:
+    minutes: 1
+
+- name: Terminate RDS subnet group
+  rds_subnet_group:
+    state: absent
+    name: "{{ db_subnet_group }}"
+  ignore_errors: true
+
+- ec2_vpc_net_info:
+    region: "{{ aws_region }}"
+    profile: "{{ aws_profile }}"
+    filters:
+      "tag:Name": "rds-{{ aws_region }}-vpc"
+  register: vpc
+
+- name: Destroy vpc security groups
+  ec2_group:
+    state: absent
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    name: "rds_sg_{{ vpc.vpcs[0].id }}"
+    rules:
+      - proto: tcp
+        from_port: 3306
+        to_port: 3306
+        cidr_ip: 0.0.0.0/0
+    tags:
+      Name: "rds_sg"
+
+- name: Destroy subnets
+  ec2_vpc_subnet:
+    state: absent
+    region: "{{ aws_region }}"
+    profile: "{{ aws_profile }}"
+    az: "{{ item.value.az }}"
+    vpc_id: "{{ vpc.vpcs[0].id }}"
+    cidr: "{{ item.value.cidr }}"
+    tags:
+      Name: "rds_{{ item.value.az }}"
+  with_dict: "{{ vpc_subnets }}"
+
+- name: Destroy Internet Gateway
+  ec2_vpc_igw:
+    state: absent
+    region: "{{ aws_region }}"
+    profile: "{{ aws_profile }}"
+    vpc_id: "{{ vpc.vpcs[0].id }}"
+    tags:
+      Name: "rds-igw"
+  register: rds_igw
+
+# - name: Grab the route tables
+#   ec2_vpc_route_table_facts:
+#     profile: "{{ aws_profile }}"
+#     region: "{{ aws_region }}"
+#     filters:
+#       vpc-id: "{{ vpc.vpcs[0].id }}"
+#   register: jenkins_route_table
+
+#- name: Destroy RT
+#  ec2_vpc_route_table:
+#    state: absent
+#    lookup: id
+#    route_table_id: "{{ jenkins_route_table.route_tables[0].id }}"
+#    vpc_id: "{{ vpc.vpcs[0].id }}"
+#    profile: "{{ aws_profile }}"
+#    region: "{{ aws_region }}"
+#    tags:
+#      Name: "jenkins_route_table_{{ vpc.vpcs[0].id }}"
+
+# - name: Update subdomain with Elastic IP
+#   route53:
+#     state: absent
+#     zone: "{{  domain_name }}"
+#     record: "jenkinsa.{{ domain_name }}"
+#     type: A
+#     ttl: 60
+#     value: "{{ eip }}"
+#     wait: yes
+#     profile: "{{ aws_profile }}"
+#     overwrite: yes
+
+- name: Destroy the VPC
+  ec2_vpc_net:
+    name: "{{ vpc_name }}"
+    profile: "{{ aws_profile }}"
+    cidr_block: "{{ vpc_cidr }}"
+    region: "{{ aws_region }}"
+    state: absent
+    tags:
+      Name: "{{ vpc_name }}"
+    tenancy: default
+

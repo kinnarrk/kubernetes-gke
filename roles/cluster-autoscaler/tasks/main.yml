@@ -1,0 +1,7 @@
+---
+# apply the IAM permissions to Autoscaling Group
+- name: Apply IAM permissions to Autoscaling Group
+  shell: "aws iam put-role-policy --role-name nodes.{{ kops_cluster_name }} --policy-name asg-nodes.{{ kops_cluster_name }} --policy-document {{ policy_json }}"
+
+- name: Install Cluster Autoscaler
+  shell: "kubectl apply -f {{ cluster_autoscaler_file_path }}"

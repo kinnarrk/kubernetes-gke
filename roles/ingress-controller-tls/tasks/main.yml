@@ -1,0 +1,207 @@
+---
+- name: Add helm charts stable repo
+  shell: "helm repo add stable https://charts.helm.sh/stable"
+  ignore_errors: yes
+
+- name: Update helm repos
+  shell: "helm repo update"
+  ignore_errors: yes
+
+- name: Install nginx-ingress from stable helm repo (this is deprecated but still works)
+  shell: "helm upgrade --install nginx-ingress stable/nginx-ingress --set controller.publishService.enabled=true"
+
+- name: Wait for nginx-ingress pod to be ready
+  shell: "kubectl wait --for=condition=Ready pod -l app=nginx-ingress --timeout=180s"
+  
+- pause:
+    seconds: 30
+
+- name: Get application loadBalancer URL
+  shell: "kubectl get svc nginx-ingress-controller -o json | jq -r .status.loadBalancer.ingress[0].ip"
+  register: nginx_ip
+
+- debug:
+    var: nginx_ip
+
+# - name: create a managed zone
+#   gcp_dns_managed_zone:
+#     name: "{{ dns_zone }}"
+#     dns_name: "{{ dns_name }}"
+#     description: "{{ dns_description }}"
+#     project: "{{ project_name }}"
+#     auth_kind: "{{ auth_kind }}"
+#     service_account_file: "{{ service_account_file }}"
+#     state: present
+#   register: managed_zone
+
+- name: get info on a managed zone
+  gcp_dns_managed_zone_info:
+    dns_name: "{{ dns_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+  register: managed_zone
+
+- name: create a resource record set
+  gcp_dns_resource_record_set:
+    name: "{{ a_record_name }}"
+    managed_zone: "{{ managed_zone.resources[0] }}"
+    type: A
+    ttl: 60
+    target:
+    - "{{ nginx_ip.stdout }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+
+# - name: Get route53 zone id
+#   shell: "aws route53 --output=json list-hosted-zones | jq '.HostedZones[] | select(.Name==\"{{ dns_zone }}.\") | .Id' | cut -d/ -f3|cut -d\\\" -f1"
+#   register: dns_zoneid
+
+# - debug:
+#     var: dns_zoneid
+
+# - name: Add route53 A record alias with ingress loadBalancer URL 
+#   shell: "aws route53 change-resource-record-sets --hosted-zone-id {{ dns_zoneid.stdout }} --change-batch '{\"Comment\":\"Creating Alias resource record sets in Route 53\",\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\": \"{{ sub_domain_name }}.{{ dns_zone }}\",\"Type\": \"A\",\"AliasTarget\":{\"HostedZoneId\": \"{{ dns_zoneid.stdout }}\",\"DNSName\": \"dualstack.{{ nginx_lb.stdout }}\",\"EvaluateTargetHealth\": false}}}]}'"
+
+# - name: Update subdomain with elb of nginx-ingress
+#   route53:
+#     state: present
+#     zone: "{{ dns_zone }}"
+#     # region: "{{ aws_region }}"
+#     record: "{{ sub_domain_name }}.{{ dns_zone }}"
+#     type: CNAME
+#     ttl: 60
+#     value: "{{ nginx_ip.stdout }}"
+#     # alias: True
+#     # alias_hosted_zone_id: "{{ dns_zoneid.stdout }}"
+#     # alias_evaluate_target_health: False
+#     wait: yes
+#     profile: "{{ aws_profile }}"
+#     overwrite: yes
+
+# - name: Update subdomain with elb of nginx-ingress
+#   route53:
+#     state: present
+#     zone: "{{ dns_zone }}"
+#     # region: "{{ aws_region }}"
+#     record: "{{ sub_domain_name }}.{{ dns_zone }}"
+#     type: CNAME
+#     ttl: 60
+#     value: "{{ nginx_lb.stdout }}"
+#     # alias: True
+#     # alias_hosted_zone_id: "{{ dns_zoneid.stdout }}"
+#     # alias_evaluate_target_health: False
+#     wait: yes
+#     profile: "{{ aws_profile }}"
+#     overwrite: yes
+
+# - name: Update subdomain with elb of nginx-ingress
+#   route53:
+#     state: present
+#     zone: "{{ dns_zone }}"
+#     # region: "{{ aws_region }}"
+#     record: "{{ sub_domain_name }}.{{ dns_zone }}"
+#     type: A
+#     ttl: 60
+#     value: "dualstack.{{ nginx_lb.stdout }}"
+#     alias: True
+#     alias_hosted_zone_id: "{{ dns_zoneid.stdout }}"
+#     alias_evaluate_target_health: False
+#     wait: yes
+#     profile: "{{ aws_profile }}"
+#     overwrite: yes
+
+- pause:
+    seconds: 5
+
+- name: Apply nginx ingress for webapp without ssl
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1beta1
+      kind: Ingress
+      metadata:
+        name: webapp-kubernetes-ingress
+        annotations:
+          kubernetes.io/ingress.class: nginx
+      spec:
+        rules:
+        - host: "{{ sub_domain_name }}.{{ dns_zone }}"
+          http:
+            paths:
+            - backend:
+                serviceName: webapp-service
+                servicePort: 80
+      EOF
+
+- pause:
+    seconds: 5
+
+- name: Install cert manager CRDs
+  shell: "kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v1.0.4/cert-manager.crds.yaml"
+
+- name: Create new namespace for cert manager
+  shell: "kubectl create namespace cert-manager"
+  ignore_errors: yes
+
+- name: Add jetstack helm repo
+  shell: "helm repo add jetstack https://charts.jetstack.io"
+
+- name: Install cert manager helm chart
+  shell: "helm upgrade --install cert-manager --version v1.0.4 --namespace cert-manager jetstack/cert-manager"
+
+- pause:
+    seconds: 30
+
+- name: Apply cerificate
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: cert-manager.io/v1alpha2
+      kind: ClusterIssuer
+      metadata:
+        name: letsencrypt-prod
+      spec:
+        acme:
+          # Email address used for ACME registration
+          email: "{{ email }}"
+          server: https://acme-v02.api.letsencrypt.org/directory
+          privateKeySecretRef:
+            # Name of a secret used to store the ACME account private key
+            name: letsencrypt-prod-private-key
+          # Add a single challenge solver, HTTP01 using nginx
+          solvers:
+          - http01:
+              ingress:
+                class: nginx
+      EOF
+
+- pause:
+    seconds: 5
+
+- name: Apply nginx ingress for webapp with ssl
+  shell:
+    cmd: |
+      cat <<EOF | kubectl apply -f -
+      apiVersion: networking.k8s.io/v1beta1
+      kind: Ingress
+      metadata:
+        name: webapp-kubernetes-ingress
+        annotations:
+          kubernetes.io/ingress.class: nginx
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+      spec:
+        tls:
+        - hosts:
+          - "{{ sub_domain_name }}.{{ dns_zone }}"
+          secretName: webapp-kubernetes-tls
+        rules:
+        - host: "{{ sub_domain_name }}.{{ dns_zone }}"
+          http:
+            paths:
+            - backend:
+                serviceName: webapp-service
+                servicePort: 80
+      EOF

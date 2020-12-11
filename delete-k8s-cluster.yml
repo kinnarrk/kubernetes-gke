@@ -1,0 +1,8 @@
+---
+## Delete GKE cluster
+
+- hosts: localhost
+  connection: local
+  roles:
+    # - networking_teardown
+    - delete-cluster

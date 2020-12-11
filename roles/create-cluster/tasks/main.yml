@@ -1,0 +1,257 @@
+---
+## Create GKE cluster
+
+- name: create a network
+  gcp_compute_network:
+    name: "{{ network_name }}"
+    auto_create_subnetworks: 'false'
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: network
+
+- name: create a subnetwork
+  gcp_compute_subnetwork:
+    name: "{{ subnetwork_name }}"
+    region: "{{ region_name }}"
+    network: "{{ network }}"
+    ip_cidr_range: "{{ subnet_ip_cidr_range }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: subnetwork
+
+- name: create a firewall
+  gcp_compute_firewall:
+    name: "{{ network_firewall_name }}"
+    network: "{{ network }}"
+    allowed:
+    - ip_protocol: icmp
+    - ip_protocol: tcp
+      ports: ["22", "80", "8080", "1000-2000", "3389", "3306", "443"]
+    # target_tags:
+    # - test-ssh-server
+    # - staging-ssh-server
+    source_tags:
+    - webapp
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+
+- name: Allocating an IP address range
+  shell:
+    cmd: |
+      cat <<EOF | gcloud compute addresses create google-managed-services-"{{ network_name }}" \
+          --global \
+          --purpose=VPC_PEERING \
+          --prefix-length=16 \
+          --network="{{ network_name }}" \
+          --project="{{ project_name }}"
+          EOF
+  register: ip_allocation
+  ignore_errors: yes
+
+- name: Creating private connection
+  shell:
+    cmd: |
+      cat <<EOF | gcloud services vpc-peerings connect \
+          --service=servicenetworking.googleapis.com \
+          --ranges=google-managed-services-"{{ network_name }}" \
+          --network="{{ network_name }}" \
+          --project="{{ project_name }}"
+          EOF
+  register: private_connection
+  ignore_errors: yes
+
+# - name: Create Network peering with default network
+#   shell:
+#     cmd: |
+#       cat <<EOF | gcloud compute networks peerings create default-"{{ network_name }}"-peering \
+#           --auto-create-routes \
+#           --network="{{ network_name }}" \
+#           --peer-project="{{ project_name }}" \
+#           --peer-network=default \
+#           --import-custom-routes \
+#           --export-custom-routes
+#           EOF
+#   register: network_peering
+  # ignore_errors: yes
+
+# - name: Create Network peering with gke cluster network
+#   shell:
+#     cmd: |
+#       cat <<EOF | gcloud compute networks peerings create "{{ network_name }}"-default-peering \
+#           --auto-create-routes \
+#           --network=default \
+#           --peer-project="{{ project_name }}" \
+#           --peer-network="{{ network_name }}" \
+#           --import-custom-routes \
+#           --export-custom-routes
+#           EOF
+#   register: network_peering2
+
+- name: create a cluster
+  gcp_container_cluster:
+    name: "{{ cluster_name }}"
+    initial_node_count: "{{ initial_node_count }}"
+    master_auth:
+      # username: "{{ username }}"
+      # password: "{{ password }}"
+      username: ""
+      password: ""
+      client_certificate_config:
+        issue_client_certificate: no
+    node_config:
+      machine_type: "{{ machine_type }}"
+      disk_size_gb: "{{ disk_size_gb }}"
+      preemptible: yes
+    # zone: "{{ zone }}"
+    ip_allocation_policy:
+      use_ip_aliases: true
+      # cluster_ipv4_cidr_block: "{{ subnet_ip_cidr_range }}"
+    location: "{{ region_name }}"
+    network: "{{ network.name }}"
+    subnetwork: "{{ subnetwork.name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+  register: cluster
+
+- name: create a node pool
+  gcp_container_node_pool:
+    name: "{{ npname }}"
+    initial_node_count: "{{ np_initial_node_count }}"
+    cluster: "{{ cluster }}"
+    location: "{{ region_name }}"
+    project: "{{ project_name }}"
+    config:
+      disk_size_gb: "{{ disk_size_gb }}"
+      machine_type: "{{ machine_type }}"
+      preemptible: yes
+    autoscaling:
+      enabled: yes
+      min_node_count: "{{ min_nodes }}"
+      max_node_count: "{{ max_nodes }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    scopes:
+      - https://www.googleapis.com/auth/cloud-platform
+    state: present
+  register: node_pool
+
+- name: Set kubectl context
+  shell: "gcloud container clusters get-credentials {{ cluster_name }} --region {{ region_name }}"
+
+# - name: create sql instance
+#   gcp_sql_instance:
+#     name: "{{ db_identifier }}"
+#     settings:
+#       ip_configuration:
+#         authorized_networks:
+#         - name: cluster subnet ip cidr
+#           value: "{{ subnet_ip_cidr_range }}"
+#         ipv4_enabled: yes
+#       tier: "{{ sql_instance_tier }}"
+#     region: "{{ region_name }}"
+#     project: "{{ project_name }}"
+#     auth_kind: "{{ auth_kind }}"
+#     service_account_file: "{{ service_account_file }}"
+#     database_version: "MYSQL_5_7"
+#     instance_type: "CLOUD_SQL_INSTANCE"
+#     state: present
+#   register: sql_instance
+
+# gcloud beta resources are not available in gcp_sql_instance module yet so need to use gcloud sdk.
+- name: Create SQL instance 
+  shell:
+    cmd: |
+      cat <<EOF | gcloud --project="{{ project_name }}" beta sql instances create "{{ db_identifier }}" \
+          --database-version=MYSQL_5_7 \
+          --tier="{{ sql_instance_tier }}" \
+          --region="{{ region_name }}" \
+          --root-password="{{ db_password }}" \
+          --network="{{ network_name }}" \
+          --no-assign-ip \
+          --no-backup
+          EOF
+  # register: sql_instance
+  ignore_errors: yes
+
+- name: create a database
+  gcp_sql_database:
+    name: "{{ db_name }}"
+    charset: utf8
+    instance: "{{ db_identifier }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: sql_database
+
+- name: get info on an instance
+  gcp_sql_instance_info:
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+  register: sql_instance_info
+
+# - debug:
+#     var: sql_instance_info.resources
+  
+- debug: msg="sql_instance_dict:{{ sql_instance_info.resources | selectattr('name', 'equalto', db_identifier) }}"
+
+- set_fact: sql_instance_dict="{{ (sql_instance_info.resources | selectattr('name', 'defined') | selectattr('name', 'equalto', db_identifier) | list) [0] }}"
+
+- name: create an sql user
+  gcp_sql_user:
+    name: "{{ db_username }}"
+    host: ""
+    password: "{{ db_password }}"
+    instance: "{{ sql_instance_dict }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: sql_user
+
+
+
+# - name: Create Google Cloud Compute Network 
+#   shell: "gcloud compute networks create {{ network_name }}"
+#   ignore_errors: yes
+
+# - name: Create Google Cloud Compute Network Firewall
+#   shell: "gcloud compute firewall-rules create {{ network_firewall_name }} --network {{ network_name }} --allow tcp:22,tcp:3389,icmp"
+#   ignore_errors: yes
+
+# - name: Create GKE cluster with gcloud SDK 
+#   shell:
+#     cmd: |
+#       cat <<EOF | gcloud container --project "{{ project_name }}" clusters create \
+#         --cluster-version "1.16.15-gke.4300" \
+#         --region "{{ region_name }}" \
+#         --network "{{ network_name }}" \
+#         --machine-type "{{ machine_type }}" \
+#         --enable-autoscaling \
+#         --num-nodes "{{ num_nodes }}" \
+#         --min-nodes "{{ min_nodes }}" \
+#         --max-nodes "{{ max_nodes }}" \
+#         --scopes gke-default,https://www.googleapis.com/auth/ndev.clouddns.readwrite \
+#         "{{ cluster_name }}"
+#       EOF
+
+# - name: Verify that all nodes are ready in the cluster
+#   shell: kubectl get nodes | grep "Ready" | wc -l
+#   register: cmd_result
+#   until: cmd_result.stdout.find('{{ node_count + master_count }}') != -1
+#   retries: 30
+#   delay: 30
+#   when: elb_info.elbs.0.instances_inservice_count >= 1 or elb_info.elbs.0.instances_outofservice_count >= 1
+
+# - debug: msg="Bastion ELB:{{ (elb_info.elbs | selectattr("dns_name", "match", "^bastion") | map(attribute='dns_name') | list)[0] }}"

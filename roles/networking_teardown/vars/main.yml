@@ -1,0 +1,6 @@
+---
+# vars file for jenkins_teardown
+tag_value: "test"
+domain_name: "test"
+eip: "0.0.0.0"
+

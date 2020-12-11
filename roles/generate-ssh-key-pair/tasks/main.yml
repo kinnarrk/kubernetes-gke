@@ -1,0 +1,17 @@
+---
+## Generate SSH key pairs
+
+- name: Check if keys already exist
+  stat:
+    path: "{{ ssh_private_key }}"
+  register: keys
+
+- name: Generates ssh key pair
+  shell: ssh-keygen -t rsa -f {{ ssh_private_key }} -P ""
+  delegate_to: localhost
+  when: keys.stat.exists == false
+
+- name: Add ssh key to keychain for ssh forwarding
+  shell: "ssh-add -k {{ ssh_private_key }}"
+  when: keys.stat.exists == false
+# when: ssh_eval.stdout.find('Agent pid') >= 1
