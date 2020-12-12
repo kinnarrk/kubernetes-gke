@@ -5,11 +5,8 @@
   connection: local
   gather_facts: true
   roles:
-    # - install-kubectl
-    # - install-kops
-    # - generate-ssh-key-pair
+    - install-kubectl
+    - install-kops
+    - generate-ssh-key-pair
     - create-cluster
-    # - metrics-server
     - ingress-controller-tls
-    # - cluster-autoscaler
-    # - networking

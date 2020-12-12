@@ -1,45 +1,6 @@
 ---
 ## Delete K8s cluster
 
-# - name: List clusters
-#   shell: "kops get clusters --state {{ kops_state_store }}"
-#   register: get_clusters
-#   ignore_errors: yes
-
-# - name: delete sql instance
-#   gcp_sql_instance:
-#     name: "{{ db_identifier }}"
-#     region: "{{ region_name }}"
-#     project: "{{ project_name }}"
-#     auth_kind: "{{ auth_kind }}"
-#     service_account_file: "{{ service_account_file }}"
-#     database_version: "MYSQL_5_7"
-#     instance_type: "CLOUD_SQL_INSTANCE"
-#     state: absent
-
-# - name: delete a database
-#   gcp_sql_database:
-#     name: "{{ db_name }}"
-#     charset: utf8
-#     project: "{{ project_name }}"
-#     auth_kind: "{{ auth_kind }}"
-#     service_account_file: "{{ service_account_file }}"
-#     state: absent
-
-# - name: delete an sql user
-#   gcp_sql_user:
-#     name: "{{ db_username }}"
-#     host: 10.1.2.3
-#     password: "{{ db_password }}"
-#     project: "{{ project_name }}"
-#     auth_kind: "{{ auth_kind }}"
-#     service_account_file: "{{ service_account_file }}"
-#     state: absent
-
-# - name: Assign private network to the instance 
-#   shell: "gcloud --project={{ project_name }} beta sql instances patch {{ db_identifier }} --network={{ network_name }}"
-#   ignore_errors: yes
-
 - name: Delete SQL instance 
   shell: "gcloud beta sql instances delete {{ db_identifier }} --async --quiet"
   ignore_errors: yes
