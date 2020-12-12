@@ -33,3 +33,8 @@ override.tf.json
 *.sh
 
 secret
+
+/cluster-autoscaler-one-asg.yaml
+
+/tmp/values.yml
+/tmp/igConfig.yml

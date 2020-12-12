@@ -1,0 +1,12 @@
+---
+## Delete K8s cluster with Kops
+
+- name: List clusters
+  shell: "kops get clusters --state {{ kops_state_store }}"
+  register: get_clusters
+  ignore_errors: yes
+
+
+- name: Check and delete the clusters
+  shell: "kops delete cluster --name {{ kops_cluster_name }} --state {{ kops_state_store }} --yes"
+  when: "get_clusters.stdout.find('{{ kops_cluster_name }}') >= 1"

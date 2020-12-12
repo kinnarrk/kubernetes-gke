@@ -110,14 +110,10 @@
       machine_type: "{{ machine_type }}"
       disk_size_gb: "{{ disk_size_gb }}"
       preemptible: yes
-    # zone: "{{ zone }}"
     ip_allocation_policy:
       use_ip_aliases: true
-      # cluster_ipv4_cidr_block: "{{ subnet_ip_cidr_range }}"
-    # monitoring_service: ""
-    # loggingService: ""
     private_cluster_config:
-      # enable_private_endpoint: true
+      enable_private_endpoint: false
       enable_private_nodes: true
       master_ipv4_cidr_block: "{{ master_ip_cidr_range }}"
     master_authorized_networks_config:

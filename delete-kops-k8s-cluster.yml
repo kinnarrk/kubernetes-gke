@@ -1,0 +1,7 @@
+---
+## Delete GKE kops cluster
+
+- hosts: localhost
+  connection: local
+  roles:
+    - delete-kops-cluster

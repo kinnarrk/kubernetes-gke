@@ -1,0 +1,20 @@
+apiVersion: kops.k8s.io/v1alpha2
+kind: InstanceGroup
+metadata:
+  labels:
+    kops.k8s.io/cluster: {{.dnsZone}}
+  name: nodes-us-east4-a
+spec:
+  image: cos-cloud/cos-stable-77-12371-114-0
+  machineType: e2-standard-4
+  maxSize: 2
+  minSize: 1
+  nodeLabels:
+    cloud.google.com/metadata-proxy-ready: "true"
+    kops.k8s.io/instancegroup: nodes-us-east4-a
+  role: Node
+  rootVolumeSize: 50
+  subnets:
+  - us-east4
+  zones:
+  - us-east4-a

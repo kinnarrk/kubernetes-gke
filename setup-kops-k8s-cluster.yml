@@ -1,11 +1,15 @@
 ---
-## Create GKE cluster
+## Create GKE kops cluster
 
 - hosts: localhost
   connection: local
   gather_facts: true
   roles:
     - install-kubectl
+    - install-kops
+    - install-boto
     - generate-ssh-key-pair
-    - create-cluster
+    - create-kops-cluster
+    - metrics-server
     - ingress-controller-tls
+    - cluster-autoscaler
