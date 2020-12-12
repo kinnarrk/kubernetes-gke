@@ -23,20 +23,9 @@
 - debug:
     var: nginx_ip
 
-# - name: create a managed zone
-#   gcp_dns_managed_zone:
-#     name: "{{ dns_zone }}"
-#     dns_name: "{{ dns_name }}"
-#     description: "{{ dns_description }}"
-#     project: "{{ project_name }}"
-#     auth_kind: "{{ auth_kind }}"
-#     service_account_file: "{{ service_account_file }}"
-#     state: present
-#   register: managed_zone
-
 - name: get info on a managed zone
   gcp_dns_managed_zone_info:
-    dns_name: "{{ dns_name }}"
+    dns_name: "{{ dns_zone }}."
     project: "{{ project_name }}"
     auth_kind: "{{ auth_kind }}"
     service_account_file: "{{ service_account_file }}"
@@ -44,7 +33,7 @@
 
 - name: create a resource record set
   gcp_dns_resource_record_set:
-    name: "{{ a_record_name }}"
+    name: "{{ sub_domain_name }}.{{ dns_zone }}."
     managed_zone: "{{ managed_zone.resources[0] }}"
     type: A
     ttl: 60
@@ -54,64 +43,6 @@
     auth_kind: "{{ auth_kind }}"
     service_account_file: "{{ service_account_file }}"
     state: present
-
-# - name: Get route53 zone id
-#   shell: "aws route53 --output=json list-hosted-zones | jq '.HostedZones[] | select(.Name==\"{{ dns_zone }}.\") | .Id' | cut -d/ -f3|cut -d\\\" -f1"
-#   register: dns_zoneid
-
-# - debug:
-#     var: dns_zoneid
-
-# - name: Add route53 A record alias with ingress loadBalancer URL 
-#   shell: "aws route53 change-resource-record-sets --hosted-zone-id {{ dns_zoneid.stdout }} --change-batch '{\"Comment\":\"Creating Alias resource record sets in Route 53\",\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\": \"{{ sub_domain_name }}.{{ dns_zone }}\",\"Type\": \"A\",\"AliasTarget\":{\"HostedZoneId\": \"{{ dns_zoneid.stdout }}\",\"DNSName\": \"dualstack.{{ nginx_lb.stdout }}\",\"EvaluateTargetHealth\": false}}}]}'"
-
-# - name: Update subdomain with elb of nginx-ingress
-#   route53:
-#     state: present
-#     zone: "{{ dns_zone }}"
-#     # region: "{{ aws_region }}"
-#     record: "{{ sub_domain_name }}.{{ dns_zone }}"
-#     type: CNAME
-#     ttl: 60
-#     value: "{{ nginx_ip.stdout }}"
-#     # alias: True
-#     # alias_hosted_zone_id: "{{ dns_zoneid.stdout }}"
-#     # alias_evaluate_target_health: False
-#     wait: yes
-#     profile: "{{ aws_profile }}"
-#     overwrite: yes
-
-# - name: Update subdomain with elb of nginx-ingress
-#   route53:
-#     state: present
-#     zone: "{{ dns_zone }}"
-#     # region: "{{ aws_region }}"
-#     record: "{{ sub_domain_name }}.{{ dns_zone }}"
-#     type: CNAME
-#     ttl: 60
-#     value: "{{ nginx_lb.stdout }}"
-#     # alias: True
-#     # alias_hosted_zone_id: "{{ dns_zoneid.stdout }}"
-#     # alias_evaluate_target_health: False
-#     wait: yes
-#     profile: "{{ aws_profile }}"
-#     overwrite: yes
-
-# - name: Update subdomain with elb of nginx-ingress
-#   route53:
-#     state: present
-#     zone: "{{ dns_zone }}"
-#     # region: "{{ aws_region }}"
-#     record: "{{ sub_domain_name }}.{{ dns_zone }}"
-#     type: A
-#     ttl: 60
-#     value: "dualstack.{{ nginx_lb.stdout }}"
-#     alias: True
-#     alias_hosted_zone_id: "{{ dns_zoneid.stdout }}"
-#     alias_evaluate_target_health: False
-#     wait: yes
-#     profile: "{{ aws_profile }}"
-#     overwrite: yes
 
 - pause:
     seconds: 5

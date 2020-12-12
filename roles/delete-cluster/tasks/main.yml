@@ -44,8 +44,20 @@
   shell: "gcloud beta sql instances delete {{ db_identifier }} --async --quiet"
   ignore_errors: yes
 
+- name: Delete SQL instance Poller
+  shell: "gcloud beta sql instances delete {{ poller_db_identifier }} --async --quiet"
+  ignore_errors: yes
+
+- name: Delete SQL instance Notifier
+  shell: "gcloud beta sql instances delete {{ notifier_db_identifier }} --async --quiet"
+  ignore_errors: yes
+
+- name: Delete NAT router 
+  shell: "gcloud compute routers delete nat-router --region={{ region_name }} --quiet"
+  ignore_errors: yes
+
 - name: delete the cluster
-  gcp_container_cluster:
+  google.cloud.gcp_container_cluster:
     name: "{{ cluster_name }}"
     location: "{{ region_name }}"
     project: "{{ project_name }}"
@@ -65,6 +77,36 @@
     service_account_file: "{{ service_account_file }}"
     state: absent
   register: node_pool
+
+- name: delete bastion host
+  google.cloud.gcp_compute_instance:
+    name: "{{ instance_name }}"
+    zone: "{{ region_name }}-b"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: bastion_instance
+
+- name: delete the disk
+  google.cloud.gcp_compute_disk:
+    name: "{{ disk_name }}"
+    zone: "{{ region_name }}-b"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: bastion_disk
+
+- name: delete the address from bastion instance
+  google.cloud.gcp_compute_address:
+    name: "{{ address_name }}"
+    region: "{{ region_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: bastion_address
 
 # - name: Delete cluster network peering
 #   shell: "gcloud compute networks peerings delete default-{{ network_name }}-peering --network {{ network_name }}  --quiet"
@@ -113,6 +155,7 @@
 
 - name: Delete the addressing
   shell: gcloud compute addresses delete google-managed-services-"{{ network_name }}" --global --quiet
+  ignore_errors: yes
 
 - name: delete the network
   gcp_compute_network:

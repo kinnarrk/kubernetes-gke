@@ -30,12 +30,13 @@
     allowed:
     - ip_protocol: icmp
     - ip_protocol: tcp
-      ports: ["22", "80", "8080", "1000-2000", "3389", "3306", "443"]
+      ports: ["22", "80", "8080", "1000-2000", "3389", "3306", "443", "3000"]
     # target_tags:
     # - test-ssh-server
     # - staging-ssh-server
-    source_tags:
-    - webapp
+    # source_tags:
+    # - webapp
+    source_ranges: ["0.0.0.0/0"]
     project: "{{ project_name }}"
     auth_kind: "{{ auth_kind }}"
     service_account_file: "{{ service_account_file }}"
@@ -66,6 +67,7 @@
   register: private_connection
   ignore_errors: yes
 
+
 # - name: Create Network peering with default network
 #   shell:
 #     cmd: |
@@ -94,7 +96,7 @@
 #   register: network_peering2
 
 - name: create a cluster
-  gcp_container_cluster:
+  google.cloud.gcp_container_cluster:
     name: "{{ cluster_name }}"
     initial_node_count: "{{ initial_node_count }}"
     master_auth:
@@ -112,6 +114,21 @@
     ip_allocation_policy:
       use_ip_aliases: true
       # cluster_ipv4_cidr_block: "{{ subnet_ip_cidr_range }}"
+    # monitoring_service: ""
+    # loggingService: ""
+    private_cluster_config:
+      # enable_private_endpoint: true
+      enable_private_nodes: true
+      master_ipv4_cidr_block: "{{ master_ip_cidr_range }}"
+    master_authorized_networks_config:
+      enabled: true
+      cidr_blocks:
+      - cidr_block: '0.0.0.0/0'
+    addons_config:
+      horizontal_pod_autoscaling: 
+        disabled: false
+      http_load_balancing:
+        disabled: false
     location: "{{ region_name }}"
     network: "{{ network.name }}"
     subnetwork: "{{ subnetwork.name }}"
@@ -120,6 +137,13 @@
     service_account_file: "{{ service_account_file }}"
     scopes:
       - https://www.googleapis.com/auth/cloud-platform
+      - https://www.googleapis.com/auth/compute
+      - https://www.googleapis.com/auth/devstorage.read_only
+      - https://www.googleapis.com/auth/logging.write
+      - https://www.googleapis.com/auth/monitoring
+      - https://www.googleapis.com/auth/servicecontrol
+      - https://www.googleapis.com/auth/service.management.readonly
+      - https://www.googleapis.com/auth/trace.append
     state: present
   register: cluster
 
@@ -148,30 +172,122 @@
 - name: Set kubectl context
   shell: "gcloud container clusters get-credentials {{ cluster_name }} --region {{ region_name }}"
 
-# - name: create sql instance
-#   gcp_sql_instance:
-#     name: "{{ db_identifier }}"
-#     settings:
-#       ip_configuration:
-#         authorized_networks:
-#         - name: cluster subnet ip cidr
-#           value: "{{ subnet_ip_cidr_range }}"
-#         ipv4_enabled: yes
-#       tier: "{{ sql_instance_tier }}"
-#     region: "{{ region_name }}"
-#     project: "{{ project_name }}"
-#     auth_kind: "{{ auth_kind }}"
-#     service_account_file: "{{ service_account_file }}"
-#     database_version: "MYSQL_5_7"
-#     instance_type: "CLOUD_SQL_INSTANCE"
-#     state: present
-#   register: sql_instance
+- name: Create NAT Router
+  shell: "gcloud compute routers create nat-router --network {{ network_name }} --region {{ region_name }}"
+  ignore_errors: yes
+
+- name: Add config to NAT Router
+  shell:
+    cmd: |
+      cat <<EOF | gcloud compute routers nats create nat-config \
+          --router-region "{{ region_name }}" \
+          --router nat-router \
+          --nat-all-subnet-ip-ranges \
+          --auto-allocate-nat-external-ips
+          EOF
+  # register: nat_router_config
+  ignore_errors: yes
+
+- name: create a disk
+  google.cloud.gcp_compute_disk:
+    name: "{{ disk_name }}"
+    size_gb: "{{ disk_size_gb }}"
+    source_image: "{{ disk_source_image }}"
+    zone: "{{ region_name }}-b"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: bastion_disk
+
+- name: create an address for bastion instance
+  google.cloud.gcp_compute_address:
+    name: "{{ address_name }}"
+    region: "{{ region_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: bastion_address
+
+- name: create bastion host
+  google.cloud.gcp_compute_instance:
+    name: "{{ instance_name }}"
+    machine_type: n1-standard-1
+    disks:
+    - auto_delete: 'true'
+      boot: 'true'
+      source: "{{ bastion_disk }}"
+    - auto_delete: 'true'
+      interface: NVME
+      type: SCRATCH
+      initialize_params:
+        disk_type: local-ssd
+    labels:
+      environment: production
+    network_interfaces:
+    - network: "{{ network }}"
+      access_configs:
+      - name: External NAT
+        nat_ip: "{{ bastion_address }}"
+        type: ONE_TO_ONE_NAT
+      subnetwork: "{{ subnetwork }}"
+    zone: "{{ region_name }}-b"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: bastion_instance
+
+- name: Wait for ssh to come up
+  wait_for: host="{{ bastion_address.address }}" port=22 delay=10 timeout=300
+
+# To make sure we give enough time for instance to be ready  
+- pause:
+    seconds: 30
+
+- name: Add SSH key to bastion host
+  shell: "gcloud compute instances add-metadata {{ instance_name }} --zone={{ region_name }}-b --metadata-from-file ssh-keys={{ ssh_key_txt_path }}"
 
 # gcloud beta resources are not available in gcp_sql_instance module yet so need to use gcloud sdk.
-- name: Create SQL instance 
+- name: Create SQL instance webapp 
   shell:
     cmd: |
       cat <<EOF | gcloud --project="{{ project_name }}" beta sql instances create "{{ db_identifier }}" \
+          --database-version=MYSQL_5_7 \
+          --tier="{{ sql_instance_tier }}" \
+          --region="{{ region_name }}" \
+          --root-password="{{ db_password }}" \
+          --network="{{ network_name }}" \
+          --no-assign-ip \
+          --async \
+          --no-backup
+          EOF
+  # register: sql_instance
+  ignore_errors: yes
+
+- name: Create SQL instance poller 
+  shell:
+    cmd: |
+      cat <<EOF | gcloud --project="{{ project_name }}" beta sql instances create "{{ poller_db_identifier }}" \
+          --database-version=MYSQL_5_7 \
+          --tier="{{ sql_instance_tier }}" \
+          --region="{{ region_name }}" \
+          --root-password="{{ db_password }}" \
+          --network="{{ network_name }}" \
+          --no-assign-ip \
+          --async \
+          --no-backup
+          EOF
+  # register: sql_instance
+  ignore_errors: yes
+
+# we will not keep creation of this instance async 
+# so by the time below instance is created both previous instances are ready
+- name: Create SQL instance notifier 
+  shell:
+    cmd: |
+      cat <<EOF | gcloud --project="{{ project_name }}" beta sql instances create "{{ notifier_db_identifier }}" \
           --database-version=MYSQL_5_7 \
           --tier="{{ sql_instance_tier }}" \
           --region="{{ region_name }}" \
@@ -183,7 +299,11 @@
   # register: sql_instance
   ignore_errors: yes
 
-- name: create a database
+# to make sure webapp and poller instances are ready
+- pause:
+    seconds: 60
+
+- name: create database webapp
   gcp_sql_database:
     name: "{{ db_name }}"
     charset: utf8
@@ -194,7 +314,7 @@
     state: present
   register: sql_database
 
-- name: get info on an instance
+- name: get info on webapp db instance
   gcp_sql_instance_info:
     project: "{{ project_name }}"
     auth_kind: "{{ auth_kind }}"
@@ -203,12 +323,12 @@
 
 # - debug:
 #     var: sql_instance_info.resources
-  
-- debug: msg="sql_instance_dict:{{ sql_instance_info.resources | selectattr('name', 'equalto', db_identifier) }}"
 
 - set_fact: sql_instance_dict="{{ (sql_instance_info.resources | selectattr('name', 'defined') | selectattr('name', 'equalto', db_identifier) | list) [0] }}"
 
-- name: create an sql user
+# - debug: msg="sql_instance_dict:{{ sql_instance_dict }}"
+
+- name: create an sql user on webapp db instance
   gcp_sql_user:
     name: "{{ db_username }}"
     host: ""
@@ -220,38 +340,65 @@
     state: present
   register: sql_user
 
+# Poller db and user
+- name: create database poller
+  gcp_sql_database:
+    name: "{{ poller_db_name }}"
+    charset: utf8
+    instance: "{{ poller_db_identifier }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: sql_database_poller
+
+# - debug:
+#     var: sql_instance_dict_poller.resources
+
+- set_fact: sql_instance_dict_poller="{{ (sql_instance_info.resources | selectattr('name', 'defined') | selectattr('name', 'equalto', poller_db_identifier) | list) [0] }}"
+
+# - debug: msg="sql_instance_dict_poller:{{ sql_instance_dict_poller }}"
+
+- name: create an sql user on poller db instance
+  gcp_sql_user:
+    name: "{{ db_username }}"
+    host: ""
+    password: "{{ db_password }}"
+    instance: "{{ sql_instance_dict_poller }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: sql_user_poller
 
 
-# - name: Create Google Cloud Compute Network 
-#   shell: "gcloud compute networks create {{ network_name }}"
-#   ignore_errors: yes
+# Notifier db and user
+- name: create database notifier
+  gcp_sql_database:
+    name: "{{ notifier_db_name }}"
+    charset: utf8
+    instance: "{{ notifier_db_identifier }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: sql_database_notifier
 
-# - name: Create Google Cloud Compute Network Firewall
-#   shell: "gcloud compute firewall-rules create {{ network_firewall_name }} --network {{ network_name }} --allow tcp:22,tcp:3389,icmp"
-#   ignore_errors: yes
+# - debug:
+#     var: sql_instance_dict_poller.resources
 
-# - name: Create GKE cluster with gcloud SDK 
-#   shell:
-#     cmd: |
-#       cat <<EOF | gcloud container --project "{{ project_name }}" clusters create \
-#         --cluster-version "1.16.15-gke.4300" \
-#         --region "{{ region_name }}" \
-#         --network "{{ network_name }}" \
-#         --machine-type "{{ machine_type }}" \
-#         --enable-autoscaling \
-#         --num-nodes "{{ num_nodes }}" \
-#         --min-nodes "{{ min_nodes }}" \
-#         --max-nodes "{{ max_nodes }}" \
-#         --scopes gke-default,https://www.googleapis.com/auth/ndev.clouddns.readwrite \
-#         "{{ cluster_name }}"
-#       EOF
+- set_fact: sql_instance_dict_notifier="{{ (sql_instance_info.resources | selectattr('name', 'defined') | selectattr('name', 'equalto', notifier_db_identifier) | list) [0] }}"
 
-# - name: Verify that all nodes are ready in the cluster
-#   shell: kubectl get nodes | grep "Ready" | wc -l
-#   register: cmd_result
-#   until: cmd_result.stdout.find('{{ node_count + master_count }}') != -1
-#   retries: 30
-#   delay: 30
-#   when: elb_info.elbs.0.instances_inservice_count >= 1 or elb_info.elbs.0.instances_outofservice_count >= 1
+# - debug: msg="sql_instance_dict_poller:{{ sql_instance_dict_poller }}"
 
-# - debug: msg="Bastion ELB:{{ (elb_info.elbs | selectattr("dns_name", "match", "^bastion") | map(attribute='dns_name') | list)[0] }}"
+- name: create an sql user on notifier db instance
+  gcp_sql_user:
+    name: "{{ db_username }}"
+    host: ""
+    password: "{{ db_password }}"
+    instance: "{{ sql_instance_dict_notifier }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: present
+  register: sql_user_notifier

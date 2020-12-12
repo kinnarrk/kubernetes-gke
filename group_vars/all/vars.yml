@@ -33,9 +33,16 @@ dns_name: gke.kinnarkansara.me.
 dns_description: "GKE zone"
 a_record_name: webapp.gke.kinnarkansara.me.
 
-# subnet_ip_cidr_range: 10.151.0.0/20
-subnet_ip_cidr_range: 172.16.0.0/16
+subnet_ip_cidr_range: 192.168.1.0/24
+# subnet_ip_cidr_range: 172.16.0.0/16
+master_ip_cidr_range: 172.16.0.0/28
 
+# Bastion host config
+disk_name: bastiondisk
+disk_source_image: projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic-v20201211a
+address_name: bastionaddress
+instance_name: bastionhostinstance
+ssh_key_txt_path: secret/ssh-keys
 
 # Below three should be set from command line
 kops_cluster_name: k8s.prod.example.com
@@ -60,19 +67,21 @@ bastion_count: 1
 networking: kopeio-vxlan
 topology: private
 
+uuid: some-random-uuid
+instance_no: 11
 # RDS
 db_subnet_group: rds-subnet-group
-db_identifier: webapp-rds-instance5
+db_identifier: "webapp-rds-instance{{instance_no}}"
 db_name: csye7125_webapp
 db_username: csye7125_user
 db_password: Asdf#12345$
 allocated_storage: 20
 sql_instance_tier: db-g1-small
 
-poller_db_identifier: poller-rds-instance
+poller_db_identifier: "poller-rds-instance{{instance_no}}"
 poller_db_name: csye7125_poller
 
-notifier_db_identifier: notifier-rds-instance
+notifier_db_identifier: "notifier-rds-instance{{instance_no}}"
 notifier_db_name: csye7125_notifier
 
 # metrics server
