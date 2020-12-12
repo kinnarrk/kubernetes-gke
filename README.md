@@ -1,8 +1,8 @@
 # Google Kubernetes Engine (GKE)
 
 ## Team Members:
-1. Kinnar Kansara
-1. Rajashree Joshi
+1. Kinnar Kansara (001388213)
+1. Rajashree Joshi (001356039)
 
 ## Managing GKE Kubernetes clusters with Ansible Playbooks
 
@@ -20,7 +20,7 @@ This project is supported for Linux (Ubuntu 18.04). For other OS like MacOS or W
     ```
 - GCloud-sdk
 
-    ```    
+    ```
     $ echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list
     $ sudo apt-get install apt-transport-https ca-certificates gnupg
     $ curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add -
@@ -105,7 +105,7 @@ ANSIBLE_STDOUT_CALLBACK=debug ansible-playbook delete-k8s-cluster.yml \
 This will delete the previously created kubernetes cluster
 
 ### References
-https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture
-https://docs.ansible.com/ansible/latest/collections/google/cloud/
-https://cloud.google.com/nat/docs/gke-example
-https://github.com/GoogleCloudPlatform/gke-private-cluster-demo
+- https://cloud.google.com/kubernetes-engine/docs/concepts/cluster-architecture
+- https://docs.ansible.com/ansible/latest/collections/google/cloud/
+- https://cloud.google.com/nat/docs/gke-example
+- https://github.com/GoogleCloudPlatform/gke-private-cluster-demo
