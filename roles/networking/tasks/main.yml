@@ -1,0 +1,402 @@
+---
+- name: Create vpc for RDS
+  ec2_vpc_net:
+    name: "{{ vpc_name }}"
+    profile: "{{ aws_profile }}"
+    cidr_block: "{{ vpc_cidr }}"
+    region: "{{ aws_region }}"
+    state: present
+    tags:
+      Name: "{{ vpc_name }}"
+    tenancy: default
+    dns_hostnames: yes
+    dns_support: yes
+    multi_ok: no
+  register: rds_vpc
+
+- debug: msg="rds_vpc:{{ rds_vpc }}"
+
+
+# Gather information about kubernetes VPC with a tag key Name and value
+- name: Get the kubernetes VPC info
+  ec2_vpc_net_info:
+    filters:
+      "tag:Name": "{{ kops_cluster_name }}"
+  register: k8s_vpc
+
+- debug: msg="k8s_vpc:{{ k8s_vpc }}"
+
+- debug: msg="k8s_vpc_id:{{ k8s_vpc.vpcs[0].vpc_id }}"
+
+
+- name: Create Internet Gateway
+  ec2_vpc_igw:
+    state: present
+    region: "{{ aws_region }}"
+    profile: "{{ aws_profile }}"
+    vpc_id: "{{ rds_vpc.vpc.id }}"
+    tags:
+      Name: "rds-igw"
+  register: rds_igw
+
+- name: Create subnets
+  ec2_vpc_subnet:
+    state: present
+    region: "{{ aws_region }}"
+    profile: "{{ aws_profile }}"
+    az: "{{ item.value.az }}"
+    vpc_id: "{{ rds_vpc.vpc.id }}"
+    cidr: "{{ item.value.cidr }}"
+    tags:
+      Name: "rds_{{ item.value.az }}"
+  with_dict: "{{ vpc_subnets }}"
+  register: rds_vpc_subnets
+
+- name: Grab the route tables
+  ec2_vpc_route_table_facts:
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    filters:
+      vpc-id: "{{ rds_vpc.vpc.id }}"
+  register: rds_route_table
+
+- debug: msg="rds_vpc_subnets:{{ rds_vpc_subnets }}"
+
+- name: Create subnet list
+  set_fact:
+    subnet_id_list: "{{ rds_vpc_subnets.results | map(attribute='subnet.id') | list }}"
+
+- debug: msg="rds_vpc_subnet_id_list:{{ subnet_id_list }}"
+
+- name: Grab the k8s subnets
+  ec2_vpc_subnet_info:
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    filters:
+      vpc-id: "{{ k8s_vpc.vpcs[0].vpc_id }}"
+  register: k8s_vpc_subnets
+
+- debug: msg="k8s_vpc_subnets:{{ k8s_vpc_subnets }}"
+
+- name: Create k8s subnet list
+  set_fact:
+    k8s_subnet_id_list: "{{ k8s_vpc_subnets.subnets | map(attribute='subnet_id') | list }}"
+
+- name: Grab the k8s route tables
+  ec2_vpc_route_table_facts:
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    filters:
+      vpc-id: "{{ k8s_vpc.vpcs[0].vpc_id }}"
+      "tag:Name": "{{ kops_cluster_name }}"
+  register: k8s_route_table
+
+- name: Gather information about a filtered list of k8s Internet Gateways
+  ec2_vpc_igw_info:
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    filters:
+      "tag:Name": "{{ kops_cluster_name }}"
+  register: k8s_igw
+
+- debug: msg="k8s_igw:{{ k8s_igw }}"
+
+# VPC peering start
+- name: Create local account VPC peering Connection
+  ec2_vpc_peer:
+    region: "{{ aws_region }}"
+    vpc_id: "{{ k8s_vpc.vpcs[0].vpc_id }}"
+    peer_vpc_id: "{{ rds_vpc.vpc.id }}"
+    state: present
+    tags:
+      Name: Peering connection for RDS to K8s
+  register: vpc_peer
+
+- name: Accept local VPC peering request
+  ec2_vpc_peer:
+    region: "{{ aws_region }}"
+    peering_id: "{{ vpc_peer.peering_id }}"
+    state: accept
+  register: action_peer
+
+- name: Update the route table in the rds vpc
+  ec2_vpc_route_table:
+    state: present
+    lookup: id
+    route_table_id: "{{ rds_route_table.route_tables[0].id }}"
+    vpc_id: "{{ rds_vpc.vpc.id}}"
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    # tags:
+    #   Name: "rds_route_table_{{ rds_vpc.vpc.id }}"
+    # subnets: "{{ subnet_id_list + k8s_subnet_id_list }}"
+    routes:
+      - dest: 0.0.0.0/0
+        gateway_id: "{{ rds_igw.gateway_id }}"
+      - dest: "{{ k8s_vpc.vpcs[0].cidr_block }}"
+        vpc_peering_connection_id: "{{ vpc_peer.peering_id }}"
+  register: rds_route_table_updated
+  
+  
+# Route table entry in k8s
+- name: Update the route table of rds in the k8s vpc
+  ec2_vpc_route_table:
+    state: present
+    lookup: id
+    route_table_id: "{{ k8s_route_table.route_tables[0].id }}"
+    vpc_id: "{{ k8s_vpc.vpcs[0].vpc_id }}"
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    # tags:
+    #   Name: "k8s_with_rds_route_table_{{ k8s_vpc.vpcs[0].vpc_id }}"
+    # subnets: "{{ subnet_id_list + k8s_subnet_id_list }}"
+    routes:
+      - dest: 0.0.0.0/0
+        gateway_id: "{{ k8s_igw.internet_gateways[0].internet_gateway_id }}"
+      - dest: "{{ rds_vpc.vpc.cidr_block }}"
+        vpc_peering_connection_id: "{{ vpc_peer.peering_id }}"
+  register: k8s_with_rds_route_table_updated
+
+- name: Create vpc security groups
+  ec2_group:
+    state: present
+    profile: "{{ aws_profile }}"
+    region: "{{ aws_region }}"
+    vpc_id: "{{ rds_vpc.vpc.id }}"
+    name: "rds_sg_{{ rds_vpc.vpc.id }}"
+    description: "rds security group for {{ rds_vpc.vpc.id }}"
+    rules:
+      - proto: tcp
+        from_port: 3306
+        to_port: 3306
+        cidr_ip: 0.0.0.0/0
+      - proto: tcp
+        from_port: 3306
+        to_port: 3306
+        cidr_ip: "{{ k8s_vpc.vpcs[0].cidr_block }}"
+    tags:
+      Name: "rds_sg"
+  register: rds_sg
+
+# - name: Create k8s vpc security groups
+#   ec2_group:
+#     state: present
+#     profile: "{{ aws_profile }}"
+#     region: "{{ aws_region }}"
+#     vpc_id: "{{ k8s_vpc.vpcs[0].vpc_id }}"
+#     name: "rds_sg_{{ k8s_vpc.vpcs[0].vpc_id }}"
+#     description: "rds security group for {{ k8s_vpc.vpcs[0].vpc_id }}"
+#     rules:
+#       - proto: tcp
+#         from_port: 3306
+#         to_port: 3306
+#         cidr_ip: 0.0.0.0/0
+#     tags:
+#       Name: "k8s_sg"
+#   register: k8s_sg
+
+- name: Create RDS DB subnet group
+  rds_subnet_group:
+    state: present
+    name: "{{ db_subnet_group }}"
+    description: Subnet group for RDS instance
+    subnets: "{{ subnet_id_list }}"
+
+- name: Check boto3 version
+  raw: "pip list boto | grep boto"
+
+- debug: msg="rds_sg.group_id:{{ rds_sg.group_id }}"
+
+# - name: Create list of two group ids
+#   set_fact:
+#     rds_vpc_security_groups:
+#       - "{{ rds_sg.group_id }}"
+#       - "{{ k8s_sg.group_id }}"
+
+- name: Create Webapp RDS DB instance
+  rds_instance:
+    state: present
+    db_instance_class: db.t2.micro
+    db_instance_identifier: "{{ db_identifier }}"
+    db_name: "{{ db_name }}"
+    # db_security_groups: "{{ rds_sg.group_id }}"
+    db_subnet_group_name: "{{ db_subnet_group }}"
+    engine: mysql
+    engine_version: "5.7"
+    multi_az: no
+    port: 3306
+    publicly_accessible: no
+    vpc_security_group_ids: "{{ rds_sg.group_id }}"
+    skip_final_snapshot: True
+    master_user_password: "{{ db_password }}"
+    username: "{{ db_username }}"
+    password: "{{ db_password }}"
+    allocated_storage: "{{ allocated_storage }}"
+  async: 1200
+  poll: 0
+  register: rds_inst_webapp
+
+- name: Create Poller RDS DB instance
+  rds_instance:
+    state: present
+    db_instance_class: db.t2.micro
+    db_instance_identifier: "{{ poller_db_identifier }}"
+    db_name: "{{ poller_db_name }}"
+    # db_security_groups: "{{ rds_sg.group_id }}"
+    db_subnet_group_name: "{{ db_subnet_group }}"
+    engine: mysql
+    engine_version: "5.7"
+    multi_az: no
+    port: 3306
+    publicly_accessible: no
+    vpc_security_group_ids: "{{ rds_sg.group_id }}"
+    skip_final_snapshot: True
+    master_user_password: "{{ db_password }}"
+    username: "{{ db_username }}"
+    password: "{{ db_password }}"
+    allocated_storage: "{{ allocated_storage }}"
+  async: 1200
+  poll: 0
+  register: rds_inst_poller
+
+- name: Create Notifier RDS DB instance
+  rds_instance:
+    state: present
+    db_instance_class: db.t2.micro
+    db_instance_identifier: "{{ notifier_db_identifier }}"
+    db_name: "{{ notifier_db_name }}"
+    # db_security_groups: "{{ rds_sg.group_id }}"
+    db_subnet_group_name: "{{ db_subnet_group }}"
+    engine: mysql
+    engine_version: "5.7"
+    multi_az: no
+    port: 3306
+    publicly_accessible: no
+    vpc_security_group_ids: "{{ rds_sg.group_id }}"
+    skip_final_snapshot: True
+    master_user_password: "{{ db_password }}"
+    username: "{{ db_username }}"
+    password: "{{ db_password }}"
+    allocated_storage: "{{ allocated_storage }}"
+  async: 1200
+  poll: 0
+  register: rds_inst_notifier
+
+
+- name: 'rds_inst_webapp - check on async task'
+  async_status:
+    jid: "{{ rds_inst_webapp.ansible_job_id }}"
+  register: job_result_webapp
+  until: job_result_webapp.finished
+  retries: 40
+  delay: 30
+
+- name: 'rds_inst_poller - check on async task'
+  async_status:
+    jid: "{{ rds_inst_poller.ansible_job_id }}"
+  register: job_result_poller
+  until: job_result_poller.finished
+  retries: 40
+  delay: 30
+
+- name: 'rds_inst_notifier - check on async task'
+  async_status:
+    jid: "{{ rds_inst_notifier.ansible_job_id }}"
+  register: job_result_notifier
+  until: job_result_notifier.finished
+  retries: 40
+  delay: 30
+
+# - debug: msg="job_result_webapp:{{ job_result_webapp }}"
+
+- name: Set fact of webapp rds host name
+  set_fact:
+    rds_endpoint_address_webapp: "{{ job_result_webapp.endpoint.address }}"
+
+- debug: msg="rds_endpoint_address_webapp:{{ rds_endpoint_address_webapp }}"
+
+- name: Set fact of poller rds host name
+  set_fact:
+    rds_endpoint_address_poller: "{{ job_result_poller.endpoint.address }}"
+
+- debug: msg="rds_endpoint_address_poler:{{ rds_endpoint_address_poller }}"
+
+- name: Set fact of notifier rds host name
+  set_fact:
+    rds_endpoint_address_notifier: "{{ job_result_notifier.endpoint.address }}"
+
+- debug: msg="rds_endpoint_address_notifier:{{ rds_endpoint_address_notifier }}"
+
+# - name: Update the route table of k8s in the rds vpc
+#   ec2_vpc_route_table:
+#     state: present
+#     lookup: id
+#     route_table_id: "{{ rds_route_table.route_tables[0].id }}"
+#     vpc_id: "{{ rds_vpc.vpc.id}}"
+#     profile: "{{ aws_profile }}"
+#     region: "{{ aws_region }}"
+#     tags:
+#       Name: "rds_with_k8s_route_table_{{ rds_vpc.vpc.id }}"
+#     subnets: "{{ k8s_subnet_id_list + subnet_id_list }}"
+#     routes:
+#       - dest: 0.0.0.0/0
+#         gateway_id: "{{ rds_igw.gateway_id }}"
+#       # - dest: "{{ k8s_vpc.vpcs[0].cidr_block_association_set[0].cidr_block }}"
+#       #   gateway_id: "{{ k8s_igw.internet_gateways[0].internet_gateway_id }}"
+#   register: rds_with_k8s_route_table_updated
+
+# - name: Check for already running EC2 instances
+#   ec2_instance_info:
+#     region: "{{ aws_region }}"
+#     profile: "{{ aws_profile }}"
+#     filters:
+#       "tag:Name": "jenkins-instance"
+#       instance-state-name: [ "running" ]
+#   register: existing_ec2
+
+# - name: Create EC2 Instace
+#   ec2:
+#     state: present
+#     tenancy: default
+#     key_name: "{{ key_name }}"
+#     profile: "{{ aws_profile }}"
+#     region: "{{ aws_region }}"
+#     instance_type: t2.micro
+#     image: "{{ ami }}"
+#     wait: yes
+#     count: 1
+#     group_id: "{{ jenkins_sg.group_id }}"
+#     vpc_subnet_id: "{{ rds_vpc_subnets.results[0].subnet.id }}"
+#     assign_public_ip: yes
+#     instance_tags:
+#       App: "jenkins"
+#       Name: "jenkins-instance"
+#   when: existing_ec2.instances | length == 0
+#   register: ec2
+
+# - name: Associate an elastic IP with an instance
+#   ec2_eip:
+#     device_id: "{{ ec2.instance_ids[0] }}"
+#     ip: "{{ eip }}"
+#     profile: "{{ aws_profile }}"
+#     region: "{{ aws_region }}"
+#   when: ec2
+#   ignore_errors: true
+
+# - name: Update subdomain with Elastic IP
+#   route53:
+#     state: present
+#     zone: "{{  hosted_zone }}"
+#     record: "jenkinsa.{{ domain_name }}"
+#     type: A
+#     ttl: 60
+#     value: "{{ eip }}"
+#     wait: yes
+#     profile: "{{ aws_profile }}"
+#     overwrite: yes
+
+# - name: Add instance public IP to host group
+#   add_host: hostname={{ eip }} groups=ec2hosts
+
+# - name: Wait for ssh to come up
+#   wait_for: host="{{ eip }}" port=22 delay=10 timeout=300

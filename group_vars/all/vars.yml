@@ -1,0 +1,99 @@
+---
+
+cluster_name: csye7125-gke-cluster2
+region_name: us-east4
+project_name: csye7125-297823
+network_name: gke-cluster-network
+subnetwork_name: gke-cluster-subnetwork
+network_firewall_name: gke-nework-firewall
+machine_type: e2-standard-4 #e2-medium
+num_nodes: 1
+min_nodes: 1
+max_nodes: 2
+
+
+# gke
+gkename: csye7125-gke-cluster
+initial_node_count: 1
+username: cluster_admin
+password: admin
+# machine_type: e2-standard-4 #n1-standard-4
+disk_size_gb: 50
+zone: us-east4 
+project: csye7125-297823
+service_account_email: gcloudsa@csye7125-297823.iam.gserviceaccount.com
+auth_kind: serviceaccount
+service_account_file: secret/csye7125-297823-e1edb9714666.json
+# gke node pool
+npname: csye7125-gke-cluster-node-pool
+np_initial_node_count: 1
+
+dns_zone_name: csye7125-gke-zone
+dns_name: gke.kinnarkansara.me.
+dns_description: "GKE zone"
+a_record_name: webapp.gke.kinnarkansara.me.
+
+subnet_ip_cidr_range: 192.168.1.0/24
+# subnet_ip_cidr_range: 172.16.0.0/16
+master_ip_cidr_range: 172.16.0.0/28
+
+# Bastion host config
+disk_name: bastiondisk
+disk_source_image: projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic-v20201211a
+address_name: bastionaddress
+instance_name: bastionhostinstance
+ssh_key_txt_path: secret/ssh-keys
+
+# Below three should be set from command line
+kops_cluster_name: k8s.gke.example.com
+kops_state_store: s3://kops-cluster-gke-example-com
+dns_zone: prod.example.com
+
+ssh_public_key: ~/.ssh/id_rsa_kops.pub
+ssh_private_key: ~/.ssh/id_rsa_kops
+
+
+cloud: gce
+zones: us-east4-a,us-east4-b,us-east4-c
+node_count: 3
+master_count: 3
+master_size: e2-standard-4
+node_size: e2-standard-4
+master_volume_size: 20
+node_volume_size: 50
+bastion: true
+bastion_count: 1
+
+project: csye7125-297823
+networking: kopeio-vxlan
+# networking: cilium
+topology: private
+
+uuid: some-random-uuid
+instance_no: 11
+# RDS
+db_subnet_group: rds-subnet-group
+db_identifier: "webapp-rds-instance{{instance_no}}"
+db_name: csye7125_webapp
+db_username: csye7125_user
+db_password: Asdf#12345$
+allocated_storage: 20
+sql_instance_tier: db-g1-small
+
+poller_db_identifier: "poller-rds-instance{{instance_no}}"
+poller_db_name: csye7125_poller
+
+notifier_db_identifier: "notifier-rds-instance{{instance_no}}"
+notifier_db_name: csye7125_notifier
+
+# metrics server
+metrics_server_file_path: "test_path"
+
+# cluster autoscaling
+cluster_autoscaler_file_path: "test_path"
+
+# aws policy json
+policy_json: "test_json"
+
+email: "me@example.com"
+sub_domain_name: "webapp"

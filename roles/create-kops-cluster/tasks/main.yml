@@ -1,0 +1,152 @@
+---
+## Create K8s cluster with Kops
+
+# - name: List availability zones
+#   aws_az_info:
+#     region: "{{ aws_region }}"
+#   register: availability_zones
+  
+# - debug: msg="{{ availability_zones.availability_zones.0.zone_name }}"
+
+# - name: Create comma separated AZ list with first n items. n=master_count from group_vars
+#   set_fact: 
+#     computed_azs: "{{ availability_zones.availability_zones[:master_count] | map(attribute='zone_name') | join(',') }}"
+
+# - debug: msg="{{ computed_azs }}"
+
+- name: List clusters
+  shell: "kops get clusters --state {{ kops_state_store }}"
+  register: get_clusters
+  ignore_errors: yes  # This is needed because above command fails when no cluster is found
+
+- name: Configure the cluster before update
+  shell: "kops create cluster \
+          --cloud={{ cloud }} \
+          --gce-service-account={{ service_account_email }} \
+          --master-zones={{ zones }} \
+          --zones={{ zones }} \
+          --state={{ kops_state_store }} \
+          --project={{ project }} \
+          --node-count={{ node_count }} \
+          --topology {{ topology }} \
+          --networking {{ networking }} \
+          --node-size={{ node_size }} \
+          --master-size={{ master_size }} \
+          --master-volume-size={{ master_volume_size }} \
+          --node-volume-size={{ node_volume_size }} \
+          --ssh-public-key={{ ssh_public_key }} \
+          --bastion='{{ bastion }}' \
+          --name {{ kops_cluster_name }}"
+  when: get_clusters.stdout.find('{{ kops_cluster_name }}') == -1
+
+# - name: Configure the cluster before update
+#   shell: "kops create cluster \
+#           --cloud={{ cloud }} \
+#           --gce-service-account={{ service_account_email }} \
+#           --zones=us-east4 \
+#           --state={{ kops_state_store }} \
+#           --project={{ project_name }} \          
+#           --topology {{ topology }} \
+#           --networking {{ networking }} \
+#           --ssh-public-key={{ ssh_public_key }} \
+#           --name {{ kops_cluster_name }}"
+#   when: get_clusters.stdout.find('{{ kops_cluster_name }}') == -1
+
+
+# - name: Configure the cluster before update
+#   shell: "kops create cluster \
+#           --zones ${ZONES} \
+#           --state={{ kops_state_store }} \
+#           --project=${PROJECT} \
+#           --node-count {{ node_count }} \
+#           --name {{ kops_cluster_name }}"
+#   when: get_clusters.stdout.find('{{ kops_cluster_name }}') == -1
+
+
+# Setting authenticationTokenWebhook specs for metrics server
+- name: Setting authenticationTokenWebhook specs
+  shell: "KOPS_FEATURE_FLAGS=SpecOverrideFlag kops set cluster --name={{ kops_cluster_name }} --state {{ kops_state_store }} spec.kubelet.authenticationTokenWebhook=true"
+
+# Setting authorizationMode specs for metrics server
+- name: Setting authorizationMode specs
+  shell: "KOPS_FEATURE_FLAGS=SpecOverrideFlag kops set cluster --name={{ kops_cluster_name }} --state {{ kops_state_store }} spec.kubelet.authorizationMode=Webhook"
+
+- name: Generate template file 1
+  shell:
+    kops toolbox template \
+    --values ./tmp/values.yml \
+    --template ./tmp/updateIG1.yml \
+    --output ./tmp/igConfig.yml
+
+- name: Change Instance Group Configuration 1
+  shell:
+    kops replace -f ./tmp/igConfig.yml --state {{ kops_state_store }}
+
+- name: Generate template file 2
+  shell:
+    kops toolbox template \
+    --values ./tmp/values.yml \
+    --template ./tmp/updateIG2.yml \
+    --output ./tmp/igConfig.yml
+
+- name: Change Instance Group Configuration 2
+  shell:
+    kops replace -f ./tmp/igConfig.yml --state {{ kops_state_store }}
+
+- name: Generate template file 3
+  shell:
+    kops toolbox template \
+    --values ./tmp/values.yml \
+    --template ./tmp/updateIG3.yml \
+    --output ./tmp/igConfig.yml
+
+- name: Change Instance Group Configuration 3
+  shell:
+    kops replace -f ./tmp/igConfig.yml --state {{ kops_state_store }}
+
+# - name: Edit Instance group maxsize
+#   shell: "EDITOR='./roles/create-cluster/templates/yq-merge-editor.sh roles/create-cluster/templates/spec.yml' kops edit instancegroups nodes --state {{ kops_state_store }} --name {{ kops_cluster_name }}"
+
+- name: Create the cluster
+  shell: "kops update cluster --name {{ kops_cluster_name }} --yes"
+  # shell: "kops update cluster --name {{ kops_cluster_name }} --state {{ kops_state_store }} --yes"
+
+# - name: Get ELB info
+#   ec2_elb_info:
+#     region: "{{ aws_region }}"
+#   register: elb_info
+
+# - name: Verify that all nodes are ready in the cluster
+#   shell: kubectl get nodes | grep "Ready" | wc -l
+#   register: cmd_result
+#   until: cmd_result.stdout.find('{{ node_count + master_count }}') != -1
+#   retries: 30
+#   delay: 30
+#   when: elb_info.elbs.0.instances_inservice_count >= 1 or elb_info.elbs.0.instances_outofservice_count >= 1
+
+# - debug: msg="Bastion ELB:{{ (elb_info.elbs | selectattr("dns_name", "match", "^bastion") | map(attribute='dns_name') | list)[0] }}"
+
+# Pause for 1 minute for cluster to be healthy.
+- pause:
+    minutes: 15
+
+- name: Show clusters with kops validate
+  shell: kops validate cluster
+  register: kops_clusters
+  ignore_errors: yes
+
+- debug: msg="{{ kops_clusters.stdout }}"
+
+- name: Rolling Update Cluster
+  shell: "kops rolling-update cluster --name {{ kops_cluster_name }} --yes --fail-on-validate-error=\"false\" --state {{ kops_state_store }}"
+
+# kubectl apply metrics server yaml
+
+# kubectl top nodes
+
+# kubectl top pods
+
+# - debug: msg="ELB:{{ elb_info.elbs }}"
+
+# - name: Add bastion ELB to host group
+#   add_host: hostname="{{ (elb_info.elbs | selectattr("dns_name", "match", "^bastion") | map(attribute='dns_name') | list)[0] }}" groups=ec2bastion

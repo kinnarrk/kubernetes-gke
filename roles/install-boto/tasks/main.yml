@@ -1,0 +1,14 @@
+---
+## Install boto for EC2 modules of Ansible
+
+- name: install python boto
+  apt:
+    name: python-boto
+    state: present
+    update_cache: no
+
+- name: install python boto3
+  apt:
+    name: python-boto3
+    state: present
+    update_cache: no

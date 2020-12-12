@@ -1,0 +1,7 @@
+---
+## Delete GKE cluster
+
+- hosts: localhost
+  connection: local
+  roles:
+    - delete-cluster

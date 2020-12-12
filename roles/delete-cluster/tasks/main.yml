@@ -1,0 +1,138 @@
+---
+## Delete K8s cluster
+
+- name: Delete SQL instance 
+  shell: "gcloud beta sql instances delete {{ db_identifier }} --async --quiet"
+  ignore_errors: yes
+
+- name: Delete SQL instance Poller
+  shell: "gcloud beta sql instances delete {{ poller_db_identifier }} --async --quiet"
+  ignore_errors: yes
+
+- name: Delete SQL instance Notifier
+  shell: "gcloud beta sql instances delete {{ notifier_db_identifier }} --async --quiet"
+  ignore_errors: yes
+
+- name: Delete NAT router 
+  shell: "gcloud compute routers delete nat-router --region={{ region_name }} --quiet"
+  ignore_errors: yes
+
+- name: delete the cluster
+  google.cloud.gcp_container_cluster:
+    name: "{{ cluster_name }}"
+    location: "{{ region_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: cluster
+
+- name: delete the node pool
+  gcp_container_node_pool:
+    name: "{{ npname }}"
+    initial_node_count: "{{ np_initial_node_count }}"
+    cluster: "{{ cluster }}"
+    location: "{{ region_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: node_pool
+
+- name: delete bastion host
+  google.cloud.gcp_compute_instance:
+    name: "{{ instance_name }}"
+    zone: "{{ region_name }}-b"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: bastion_instance
+
+- name: delete the disk
+  google.cloud.gcp_compute_disk:
+    name: "{{ disk_name }}"
+    zone: "{{ region_name }}-b"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: bastion_disk
+
+- name: delete the address from bastion instance
+  google.cloud.gcp_compute_address:
+    name: "{{ address_name }}"
+    region: "{{ region_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: bastion_address
+
+# - name: Delete cluster network peering
+#   shell: "gcloud compute networks peerings delete default-{{ network_name }}-peering --network {{ network_name }}  --quiet"
+#   ignore_errors: yes
+
+# - name: Delete cluster network peering 2
+#   shell: "gcloud compute networks peerings delete {{ network_name }}-default-peering --network default  --quiet"
+#   ignore_errors: yes
+
+- name: delete the firewall
+  gcp_compute_firewall:
+    name: "{{ network_firewall_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+
+- name: get info on a network
+  gcp_compute_network_info:
+    filters:
+    - name = "{{ network_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+  register: network
+
+- name: delete the subnetwork
+  gcp_compute_subnetwork:
+    name: "{{ subnetwork_name }}"
+    region: "{{ region_name }}"
+    network: "{{ network }}"
+    ip_cidr_range: 172.16.0.0/16
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  register: subnetwork
+
+- name: Delete peering 1
+  shell: "gcloud compute networks peerings delete cloudsql-mysql-googleapis-com --network {{ network_name }} --quiet"
+  ignore_errors: yes
+
+- name: Delete peering 2
+  shell: "gcloud compute networks peerings delete servicenetworking-googleapis-com --network {{ network_name }} --quiet"
+  ignore_errors: yes
+
+- name: Delete the addressing
+  shell: gcloud compute addresses delete google-managed-services-"{{ network_name }}" --global --quiet
+  ignore_errors: yes
+
+- name: delete the network
+  gcp_compute_network:
+    name: "{{ network_name }}"
+    project: "{{ project_name }}"
+    auth_kind: "{{ auth_kind }}"
+    service_account_file: "{{ service_account_file }}"
+    state: absent
+  # register: network
+
+# - name: Check and delete the clusters
+#   shell: "gcloud container clusters delete --region {{ region_name }} {{ cluster_name }} --quiet"
+#   # when: "get_clusters.stdout.find('{{ kops_cluster_name }}') >= 1"
+
+# - name: Delete cluster network firewall
+#   shell: "gcloud compute firewall-rules delete {{ network_firewall_name }} --quiet"
+
+# - name: Delete cluster network
+#   shell: "gcloud compute networks delete {{ network_name }} --quiet"
