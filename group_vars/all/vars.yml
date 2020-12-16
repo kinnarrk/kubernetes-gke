@@ -21,6 +21,7 @@ password: admin
 disk_size_gb: 50
 zone: us-east4 
 project: csye7125-297823
+# Searvice account email in form: sa@project.iam.gserviceaccount.com
 service_account_email: gcloudsa@csye7125-297823.iam.gserviceaccount.com
 auth_kind: serviceaccount
 service_account_file: secret/csye7125-297823-e1edb9714666.json
@@ -29,9 +30,9 @@ npname: csye7125-gke-cluster-node-pool
 np_initial_node_count: 1
 
 dns_zone_name: csye7125-gke-zone
-dns_name: gke.kinnarkansara.me.
+dns_name: gke.example.me.
 dns_description: "GKE zone"
-a_record_name: webapp.gke.kinnarkansara.me.
+a_record_name: webapp.gke.example.me.
 
 subnet_ip_cidr_range: 192.168.1.0/24
 # subnet_ip_cidr_range: 172.16.0.0/16
